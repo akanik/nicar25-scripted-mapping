@@ -1,0 +1,410 @@
+
+
+```{r}
+
+#remove scientific notation
+options(scipen=999)
+
+### Run this line to install all packages, if needed. 
+#install.packages(c("sf", "tidyverse", "leaflet", "mapview", "janitor", "lubridate", "tidycensus", "lwgeom", "tigris"))
+
+### Call our packages into our script here.
+library(sf)
+library(tidyverse)
+library(janitor)
+library(mapview)
+library(lubridate)
+library(tidycensus)
+library(tigris)
+library(lwgeom)
+
+sf_use_s2(FALSE)
+
+
+```
+
+
+## Behind the scenes with geo files
+
+Helpful Minneapolis codes:
+- Minnesota is state fips 27
+- Minneapolis is in Hennepin County, which is county fips 27053.
+
+Where to download/find these GIS files for your state!
+- **Schools:** [The NCES EDGE open data portal](https://data-nces.opendata.arcgis.com/) contains all sorts of helpful data, including school locations.
+- **Neighborhoods:** check your city GIS site
+- **Toxic Release Inventory:** Multiple years and states [available here](https://www.epa.gov/toxics-release-inventory-tri-program/tri-basic-data-files-calendar-years-1987-present)
+- **Census Tigerline URLs:** [pick your vintage here](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html), then click FTP Archive and navigate to the shapefile you need.
+
+```{r}
+
+#importing shapefiles and geojson
+schools <- st_read("../GIS/nces-mn-schools.geojson") |>
+  # a function that cleans up column names
+  clean_names()
+
+#importing from zip
+hoods = st_read("../GIS/Minneapolis_Neighborhoods_4501150611105070206/Minneapolis_Neighborhoods.shp") |>
+  clean_names()
+
+#importing from library/api
+tracts <- tracts(state = "MN", cb = TRUE) |>
+  clean_names()
+
+#importing from csv
+
+tri <- read_csv("../GIS/epa-tri-2023-mn.csv") |>
+  clean_names() |>
+  st_as_sf(coords = c("x13_longitude", "x12_latitude"), crs = 4326)
+
+# we are going to remove those pesky numbers in our column names because they are annoying
+names(tri) <- str_remove(names(tri), "^x\\d+_")
+
+```
+
+```{r}
+
+#exploring geospatial data is just like exploring any other dataframe
+
+glimpse(schools)
+
+```
+
+```{r}
+
+head(schools)
+
+```
+
+```{r}
+
+#lets take a closer look at the geometry column
+
+schools |>
+  select(geometry)
+
+```
+
+```{r}
+
+# we can also look at the projection of the data using mapview
+
+st_crs(schools)
+
+```
+
+```{r}
+
+#now you try looking at the other geodataframes crs
+
+```
+
+
+Cam is going to talk about projects here for a minute. They're important friends.
+
+```{r}
+
+mapview(schools)
+
+```
+
+## Slaying with APIs
+A lot of ArcGIS maps have helpful API portals that will walk you thru querying and downloading the geojson.
+
+Here's a video that shows you how to find that query page when you're looking at an ArcGIS map online:
+
+Some of the data you try and pull down will clearly be accessible via API. Here's a video that shows you how to find the API page: 
+
+```{r}
+
+potholes <- read_sf("https://services.arcgis.com/afSMGVsC7QlRK1kZ/arcgis/rest/services/Public_311_2024/FeatureServer/0/query?where=TYPENAME%20%3D%20'Pothole'&outFields=*&outSR=4326&f=json") |>
+  clean_names()
+
+glimpse(potholes)
+
+mapview(potholes)
+
+```
+
+
+```{r}
+
+#sometimes an API requires an access key
+#here's an example oh how to get Census ACS 5-yr data via the API
+#and more info on the various APIs https://www.census.gov/data/developers/data-sets/acs-5year.html
+#NOTE: different tables (detailed, subject, etc) have different geography levels available
+
+
+
+data_2023 <- get_acs(geography = "tract", 
+        variables = c("B01001_001", "B11016_001", "B19013_001"), #picking the variables we want
+        state = "MN", #setting the state to minnesota
+        geometry = FALSE, # not including the geometry
+        cache_table = TRUE) |> #caching the data so we don't call the API multiple times
+  select(-moe) |> #removing the margin of error columns
+  pivot_wider(values_from = estimate, names_from = variable) |> #pivoting the data wider so each column is a variable
+  rename(total_pop = B01001_001, #renaming the columns to be more descriptive
+         households = B11016_001, 
+         median_income = B19013_001) |>
+  clean_names()
+
+
+data_2023 |>
+  glimpse()
+
+```
+
+## Spatial joins and filtering
+
+```{r error=TRUE}
+
+potholes_in_hoods <- st_join(potholes, hoods, join = st_within)
+
+```
+
+Remember, the cordination system of the two datasets must match for the join to work. Let's fix that.
+
+```{r}
+
+potholes <- potholes |>
+  st_transform(crs=4326) |>
+  st_make_valid()
+
+hoods <- hoods |>
+  st_transform(crs=4326) |>
+  st_make_valid()
+
+```
+
+Now let's try again.
+
+```{r}
+
+#in r, we must specify left = FALSE to ensure only the potholes in the neighborhoods are returned
+potholes_in_hoods <- st_join(potholes, hoods, join = st_within, left = FALSE)
+
+glimpse(potholes_in_hoods)
+mapview(potholes_in_hoods) +
+  mapview(hoods)
+
+```
+
+## Count points in polygon
+
+My fav way to do a point in polygon is to combine a spatial join and a group_by. First, the spatial join lets us connect a neighborhood name with each pothole, next, the group_by will let us count the potholes present in each neighborhood. 
+
+```{r}
+
+potholes_in_hoods |>
+  group_by(bdname) |>
+  summarize(pothole_count = n()) |>
+  arrange(desc(pothole_count))
+
+```
+
+```{r}
+
+#if we feel like knowing more about the types of potholes in each hood, we can do a pivot_table instead
+
+potholes_in_hoods |>
+  st_drop_geometry() |> #this time we will drop geometry so it doesn't show up in our aggregate table
+  group_by(bdname, casestatus) |>
+  summarize(pothole_count = n()) |>
+  pivot_wider(names_from = casestatus, values_from = pothole_count, values_fill = 0) |> #pivoting wider
+  clean_names() |> #cleaning up the column names so the numbers have Xs in front of them
+  rename( #renaming the columns to be more descriptive
+    open = x1,
+    closed = x0
+  ) |>
+  mutate(total = open + closed) |> #adding a total column
+  arrange(desc(total)) #sorting by total descending
+
+```
+
+## Crosswalks
+
+Generally, demographic data like population and median income isn't calculated for custom geographies like neighborhoods. But no matter! We can calculate that sort of information for ourselves using crosswalks.
+
+In this example, we are going to cross Census tracts with Minneapolis neighborhoods.
+
+```{r}
+
+#join
+tracts_data <- tracts |>
+  left_join(data_2023, join_by("geoid"))
+
+#we need to make sure both gdfs are in the same projection, but unlike the spatial join
+#we need to make sure that projection uses meters or feet because we'll be calculating area
+#this projection is specific to the Twin Cities area: https://epsg.io/6505
+
+tracts_data <- tracts_data |>
+  st_transform(crs = 6505)
+
+hoods <- hoods |>
+  st_transform(crs = 6505)
+
+#and we'll need to calculate the area of the tracts before and after we do the intersection so we can
+#calculate the actual estimated count of people of different races in each tract segmemt.
+
+tracts_data <- tracts_data |>
+  mutate(pre_area = st_area(geometry))
+
+
+
+#now let's do that intersection!
+
+#Ryan here: For some reason, this code returns an error. I cannot figure out why,. It gives quite possibly the least descriptive error I have ever seen in my life. St_join should work the same as calling the intersection function directly, but ti;s not in this case. Very annoying.
+#tracts_hoods <-  st_join(tracts_data, hoods, join = st_intersection)
+
+# So we will jsut do it this way instead
+tracts_hoods <- st_intersection(tracts_data, hoods)
+
+#and calculate the area post intersection.
+tracts_hoods <- tracts_hoods |>
+  mutate(post_area = st_area(geometry))
+
+#from the pre and post area calculations we create a percentage
+tracts_hoods <- tracts_hoods |>
+  mutate(pct_area = post_area/pre_area)
+
+#and then we multiply our tract data counts by that percentage
+#to get estimates per segments of the tract that falls within each hood
+
+tracts_hoods <- tracts_hoods |>
+  mutate(
+    post_pop = total_pop * pct_area,
+    post_households = households * pct_area,
+    post_income = median_income * pct_area
+  )
+
+#groupby the neighborhood name so we can join back to our neighborhood shapes
+
+hoods_data = tracts_hoods |>
+  group_by(bdname) |>
+  summarise(
+    post_pop = sum(post_pop),
+    post_households = sum(post_households),
+    post_icome = mean(post_households)
+  )
+
+hoods_data |>
+  head()
+
+```
+
+## Buffers
+Now, let's work with our schools and toxic release inventory data! I think it would be interesting to know which schools have a facility that releases toxic air or water chemicals near it. Shall we say 1 mile? If this were for an actual story, we would talk to an expert in the field to figure out the best distance to use.
+
+Cam is gonna talk about finding experts to help inform your geographic analysis.
+
+```{r}
+
+#first, we have to change the projection to get it into feet
+
+schools <- schools |>
+  st_transform(crs = 6505)
+
+# Next, we draw a 1 mile buffer around each of our schools. The buffer distance depends on 
+# the units of the CRS. Since our CRS is in feet, we need to convert 1 mile to feet.
+schools_buffers <- schools |> 
+  st_buffer(5280)
+
+
+# keep only the columns we need
+schools_buffers <- schools_buffers |>
+  select(ncessch, name, city, zip, nmcnty, nmcbsa)
+
+mapview(schools_buffers)
+
+```
+
+```{r}
+
+#we're going to group the TRI by facility because with this dataset, a single facility will have 
+#many rows, one for each chemical released
+
+unique_tri <- tri |>
+  group_by(trifd, facility_name, street_address, city, county) |>
+  summarise(chemicals_released = n())
+
+# us R users never lose the geometry column when we group_by, but droppping it could speed things up on big files
+unique_tri |>
+  arrange(desc(chemicals_released)) |>
+  head()
+
+```
+```{r}
+
+mapview(tri)
+
+```
+
+
+```{r}
+
+school_buffers <- schools_buffers |>
+  st_transform(4326)
+
+unique_tri <- unique_tri |>
+  st_transform(4326)
+
+tri_schools <- st_join(unique_tri, school_buffers, join = st_within)
+
+print(nrow(tri))
+
+print(nrow(tri_schools |>
+             unique()))
+
+tri_schools |>
+  head()
+```
+
+If you're asking yourself "why that CRS?" it's because when you do a spatial join with points, you need to everything to be in a geometric CRS rather than a projected CRS. I don't know man, ask Cam. She's way smarter than I am.
+
+If you're further asking yourself "Why are there some schools in there more than once!?". It's because some schools have more than one facility within one mile of them. Le YIPE! 
+
+But we know how to deal with that, right? We can groupby the school and count the facilities!
+
+```{r}
+
+#if you're wondering why there are MORE tri_schools records than tri records, it's because
+#some facilities are within a mile of more than one school. Le YIPE!
+#but we know how to deal with that, right? We can groupby the school and count the facilities
+
+tri_per_school <- tri_schools |>
+  group_by(name, city.x, nmcnty) |>
+  summarise(tri_facilities = n())
+
+tri_per_school |>
+  arrange(desc(tri_facilities)) |>
+  head()
+
+```
+
+## Calculating distance
+So now we know which schools are within a mile of a TRI facility... but what if I wanted to know about the school with the closest TRI facility? Or maybe calculate all of the distances between schools and their closes TRI facility?
+
+```{r}
+
+# you're gonna hate me... but we need to change these damn projections back to 6505 
+# cause we need the feet!
+
+schools <- schools |>
+  st_transform(6505)
+
+unique_tri <- unique_tri |>
+  st_transform(6505)
+
+#In R, we first have to build a list of features that are closest to each school
+nearest_indices <- st_nearest_feature(schools, unique_tri)
+
+# Because it is put out in the order of the dataframe, we can just cbind it to the existing data
+closest_tri_school <- schools %>%
+  mutate(nearest_tri_geom = st_geometry(unique_tri)[nearest_indices]) %>%
+  #then calculate the distance between them
+  mutate(distance_m = st_distance(geometry, nearest_tri_geom, by_element = TRUE))
+
+glimpse(closest_tri_school)
+
+```
+
