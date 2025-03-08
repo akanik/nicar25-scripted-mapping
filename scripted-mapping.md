@@ -74,6 +74,11 @@ Where to download/find these GIS files for your state!
 - **Census Tigerline URLs:** [pick your vintage here](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html), then click FTP Archive and navigate to the shapefile you need.
 
 ## Projections
+We all only make the medium bucks here, so we're not going to get into the nitty gritty of the math behind projections and reprojections or why one might be the best option over the other. The key concepts to remember here are that we're taking a 3D globe and trying to cut it down to size to make a flat, 2D map! And with that comes some complicated map math.
+
+With most spatial data analysis, you'll typically run into a few industry favorites for a coordinate reference system, or CRS. [EPSG.io](https://epsg.io) is a great resource for searching through EPSG codes, which are a sort of index code assigned to different ways to visualize that 3D to 2D transition (or vice versa). 
+
+In order to calculate distance on the ground in a unit that doesn't make you want to tear your hair out (like in meters or feet or miles), you need to reproject your layer into one that supports **meters** and not **degrees**. We're picking `EPSG:6505`, which is also known as `NAD83`. Other popular ones are `EPSG:4326`, or `WGS84`, as well as `EPSG:3857`, aka `WGS84/Pseudo-Mercator`, which is what most web maps use.
 
 ## Slaying with APIs 
 
@@ -105,6 +110,23 @@ Let's set those up now.
 
 
 ## Crosswalks: When to use which geometry level
+Sometimes, you have two different geographic boundaries that you want to link togeher in order to make conclusions about them both. (An example of this would be school district boundaries and cities, or Census tracts and neighborhoods, which we'll use with our coding demo!)
+
+The caveat: you want to always make sure you're weighing your data by the area it overlaps. Otherwise, you might be making improper conclusions. Smaller geographies can help with this, but always confirm it with on the ground knowledge as well!
 
 ## Buffers: Finding experts to inform your geographic decision-making
+Buffers can be incredibly useful and powerful tools to quickly determine proximity of two things to each other. They're quick, they're easy, and relatively painless, especially once you have the correct CRS in place!
+
+One thing to be aware of here are predicates, which are essentially different Boolean tests run against different shapes. There's a lot to get into there [and we wrote about it for our class on this last year in more detail](https://github.com/akanik/nicar24-mapping-session/blob/main/qgis-walkthrus/qgis-spatial-joins.md#executing-spatial-joins) with pictures and examples.
+
+We can (and will) use these concepts to help us navigate which predicates to select for our own data. And sticking with the theme of framing things as questions, this is how I think about predicates for myself:
+* intersect — "`does layer one share any space with layer two?`"
+* contain — "`is layer two completely overlapped by layer one?`"
+* equal = "`does layer one match layer two?`"
+* touch = "`do layer one and layer two touch at all?`"
+* overlap = "`do layer one and layer two share some space, but not all?`"
+* are within = "`is layer one completely overlapped by layer two?`"
+* cross = "`do i really genuinely like making maps?`" (kidding — "`is layer two a line, and does it intersect or touch both ends of layer one?`")
+
+These aren't perfect by any means, but they help guide some of my decision-making. I wish I had a cool mnemonic device to share, but the truth is that with spatial data analysis, and data journalism as a whole, you don't need to have the right answers memorized — you just need to know where to find them. :) 
 
