@@ -148,6 +148,8 @@ data_2023 <- get_acs(geography = "tract",
          median_income = B19013_001) |>
   clean_names()
 
+#use this is tidyverse doesn't work
+#data_2023 <- read_csv("../data/analyzed/2023ACS5yr-hennipen-mn-tract-data.csv")
 
 data_2023 |>
   glimpse()
